@@ -30,7 +30,8 @@ help = usage + "\n" +  <<~END_HELP
     This program solves both problems: it exists only when the Filemerge
     window is closed; and it renames the files created by git, putting them
     in a directory whose last component reads either BEFORE or AFTER to
-    clearly show what is compared to what.
+    clearly show what is compared to what. All temporary files are cleaned
+    up after `git difftool` returns.
 END_HELP
 
 args = {}
