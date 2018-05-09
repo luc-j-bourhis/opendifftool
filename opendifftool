@@ -1,0 +1,113 @@
+#!/usr/bin/env ruby
+
+require 'tmpdir'
+require 'fileutils'
+
+require 'pp'
+require 'io/console'
+
+# Command-line processing
+usage = <<~END_USAGE
+    Usage:
+        myopendiff file1 file2 [-ancestor ancestor_file] [-merge merge_file]
+        myopendiff -help
+END_USAGE
+
+help = usage + "\n" +  <<~END_HELP
+    This program is a drop-in replacement for Apple command-line tool "opendiff",
+    geared toward being a better diff or merge tool for git.
+    Indeed, `git difftool --tool=opendiff` suffers from two shortcomings:
+
+    - opendiff opens a window in the Filemerge application and then immediately
+      exits. As a result, when several files have been modified, `git difftool`
+      results in several windows being opened in slow succession, forcing
+      the user to wait until they are all up.
+
+    - git store the contents to be compared in file with names starting with
+      a random prefix, which makes the window title less legible than they
+      should be.
+
+    This program solves both problems: it exists only when the Filemerge
+    window is closed; and it renames the files created by git, putting them
+    in a directory whose last component reads either BEFORE or AFTER to
+    clearly show what is compared to what.
+END_HELP
+
+args = {}
+coming_args = [:file2, :file1] # a queue
+ARGV.each do |arg|
+    case arg
+    when '-ancestor'
+        coming_args.push :ancestor
+    when '-merge'
+        coming_args.push :merge
+    when '-help'
+        args[:help] = true
+    when /^-/
+        puts usage
+        exit 1
+    else
+        assigned = coming_args.pop
+        break if assigned.nil?
+        args[assigned] = arg
+    end
+end
+
+if args.key?(:help)
+    if args.size > 1
+        puts usage
+        exit 1
+    else
+        puts help
+        exit 0
+    end
+else
+    unless args.key?(:file1) && args.key?(:file2)
+        puts usage
+        exit 1
+    end
+end
+
+# pp args
+
+# Stash away the files created by git if need be
+Dir.mktmpdir(['opendifftool', nil], '/tmp') do |dir|
+    originals = args.values_at(:file1, :file2)
+    diffed = originals.zip(['BEFORE', 'AFTER']).map do |f,d|
+        if %r{^/var/folders/.*//\w{6}_(.+)$} =~ f
+            "#{dir}/#{d}/#{$1}"
+        else
+            f
+        end
+    end
+    originals.zip(diffed) do |f,g|
+        if f != g
+            FileUtils.mkdir_p(File.dirname(g))
+            FileUtils.cp(f, g)
+        end
+    end
+
+    # Fire opendiff
+    cmd = ["/usr/bin/opendiff"] + diffed
+    [:merge, :ancestor].each do |o|
+        cmd <<= ["-#{o}", args[:o]] if args.key?(:o)
+    end
+    system(*cmd)
+
+    # Wait for Filemerge window to open and then wait for it to close
+    window_title = "%s vs. %s" % diffed.map{|f| File.basename(f)}
+    cmd = ['/usr/bin/osascript'] + <<~END_APPLESCRIPT
+        tell application "System Events"
+            set condition to false
+            repeat until condition
+                tell application process "FileMerge"
+                    set condition to ("#{window_title}" is not in (title of every window))
+                end tell
+                delay 0.01
+            end repeat
+        end tell
+        END_APPLESCRIPT
+        .split("\n").map {|line| ['-e', line]}.flatten
+    sleep(0.02)
+    system(*cmd)
+end
